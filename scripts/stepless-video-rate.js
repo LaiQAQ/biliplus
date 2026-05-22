@@ -3,29 +3,35 @@
  */
 
 let videoRate = 1.0;
+const MIN_VIDEO_RATE = 0.1;
+const MAX_VIDEO_RATE = 5.0;
+const VIDEO_RATE_STEP = 0.1;
 
 chrome.storage.sync.get(['biliplus-enable', 'stepless-video-rate'], storage => {
   if (storage['biliplus-enable'] && storage['stepless-video-rate']) {
     let hideBoxTimeout = null;
-    var mousePositionY = 0;
-    var initialPositionY = -10;
     const rateButton = `
       <div class="stepless-video-rate-btn" role="button" aria-label="无级倍速" tabindex="0">
         <div class="stepless-video-rate-btn-result">无级倍速</div>
         <div class="stepless-video-rate-box">
-          <div class="stepless-video-rate-number">1.0</div>
-          <div class="stepless-video-rate-progress bui bui-slider">
-            <div class="bui-area">
-              <div
-                class="bui-track bui-track-vertical"
-                style=""
-              >
-                <div class="bui-bar-wrap">
-                  <div class="bui-bar bui-bar-normal" role="progressbar" style="transform: scaleY(0.2);"></div>
-                </div>
-                <div class="bui-thumb" style="left: -5px; transform: translateY(-10px);">
-                  <div class="bui-thumb-dot" style=""></div>
-                </div>
+          <div class="stepless-video-rate-number">
+            <button type="button" class="stepless-video-rate-step stepless-video-rate-step-minus" aria-label="降低倍速">-</button>
+            <input class="stepless-video-rate-input" type="number" min="0.1" max="5.0" step="0.1" value="1.0" aria-label="输入倍速" />
+            <button type="button" class="stepless-video-rate-step stepless-video-rate-step-plus" aria-label="提高倍速">+</button>
+          </div>
+          <div
+            class="stepless-video-rate-slider"
+            role="slider"
+            aria-label="倍速"
+            aria-valuemin="0.1"
+            aria-valuemax="5.0"
+            aria-valuenow="1.0"
+            tabindex="0"
+          >
+            <div class="stepless-video-rate-track">
+              <div class="stepless-video-rate-fill"></div>
+              <div class="stepless-video-rate-thumb">
+                <div class="stepless-video-rate-thumb-dot"></div>
               </div>
             </div>
           </div>
@@ -49,74 +55,140 @@ chrome.storage.sync.get(['biliplus-enable', 'stepless-video-rate'], storage => {
         newRateButton.outerHTML = rateButton;
 
         const box = document.querySelector('.stepless-video-rate-box');
-        const dot = document.querySelector('.stepless-video-rate-box .bui-thumb');
-        const bar = document.querySelector('.stepless-video-rate-box .bui-bar');
-        const rate = document.querySelector('.stepless-video-rate-box .stepless-video-rate-number');
+        const slider = document.querySelector('.stepless-video-rate-slider');
+        const fill = document.querySelector('.stepless-video-rate-fill');
+        const thumb = document.querySelector('.stepless-video-rate-thumb');
+        const rateInput = document.querySelector('.stepless-video-rate-input');
+        const decreaseRateButton = document.querySelector('.stepless-video-rate-step-minus');
+        const increaseRateButton = document.querySelector('.stepless-video-rate-step-plus');
+        const steplessBtn = document.querySelector('.stepless-video-rate-btn-result');
+        const steplessRateButton = document.querySelector('.stepless-video-rate-btn');
 
         // 进入 btn 就显示 box
-        document.querySelector('#bilibili-player').addEventListener('mouseover', e => {
-          const target = e.target;
-          if (target.nodeName === 'DIV' && target.parentElement.classList.contains('stepless-video-rate-btn')) {
-            showBox();
-            if (hideBoxTimeout != null) {
-              clearTimeout(hideBoxTimeout);
-            }
+        steplessRateButton.addEventListener('mouseenter', () => {
+          showBox();
+          if (hideBoxTimeout != null) {
+            clearTimeout(hideBoxTimeout);
           }
         });
 
         // 离开 btn 就消失 box
-        document.querySelector('.stepless-video-rate-btn').addEventListener('mouseleave', e => {
+        steplessRateButton.addEventListener('mouseleave', () => {
           // 防抖 400 ms
           hideBoxTimeout = setTimeout(() => {
             hideBox();
-            box.removeEventListener('mousemove', mouseMove);
           }, 400);
         });
 
-        // 进度条逻辑
-        let tempPositionY = 0;
-        function mouseDown(event) {
-          mousePositionY = event.clientY;
-          tempPositionY = initialPositionY;
-          box.addEventListener('mousemove', mouseMove);
+        function formatRate(rate) {
+          return Number(rate).toFixed(1);
         }
 
-        function mouseMove(event) {
-          let deltaY = event.clientY - mousePositionY;
-
-          if (tempPositionY + deltaY < -48 || tempPositionY + deltaY > 0) {
-            return;
+        function normalizeRate(rate) {
+          const parsedRate = Number(rate);
+          if (!Number.isFinite(parsedRate)) {
+            return videoRate;
           }
-
-          initialPositionY = tempPositionY + deltaY;
-          dot.style.transform = `translateY(${initialPositionY}px)`;
-          bar.style.transform = `scaleY(${Math.abs(initialPositionY) / 48})`;
-          videoRate = ((Math.abs(initialPositionY) / 48) * 5).toFixed(1);
-          rate.innerText = videoRate;
-          document.querySelector('video').playbackRate = videoRate;
+          return Math.min(MAX_VIDEO_RATE, Math.max(MIN_VIDEO_RATE, parsedRate));
         }
 
-        function mouseUp() {
-          box.removeEventListener('mousemove', mouseMove);
+        function updateRate(rate) {
+          videoRate = Number(normalizeRate(rate).toFixed(1));
+          const ratePercent = ((videoRate - MIN_VIDEO_RATE) / (MAX_VIDEO_RATE - MIN_VIDEO_RATE)) * 100;
+
+          rateInput.value = formatRate(videoRate);
+          fill.style.height = `${ratePercent}%`;
+          thumb.style.bottom = `${ratePercent}%`;
+          slider.setAttribute('aria-valuenow', formatRate(videoRate));
+          slider.setAttribute('aria-valuetext', `${formatRate(videoRate)}倍速`);
+
+          const video = document.querySelector('video');
+          if (video != null) {
+            video.playbackRate = videoRate;
+          }
         }
 
-        dot.addEventListener('mousedown', mouseDown);
-        box.addEventListener('mouseup', mouseUp);
+        function getRateByPointer(event) {
+          const sliderRect = slider.getBoundingClientRect();
+          const sliderPercent = Math.min(1, Math.max(0, (sliderRect.bottom - event.clientY) / sliderRect.height));
+          return MIN_VIDEO_RATE + sliderPercent * (MAX_VIDEO_RATE - MIN_VIDEO_RATE);
+        }
 
-        const steplessBtn = document.querySelector('.stepless-video-rate-btn-result')
-        console.log("🚀 ~ observer ~ steplessBtn:", steplessBtn)
+        function updateRateByPointer(event) {
+          event.preventDefault();
+          updateRate(getRateByPointer(event));
+        }
 
-        //double click to reset rate
-        steplessBtn.addEventListener('dblclick', () => {
-          document.querySelector('video').playbackRate = 1.0;
-          videoRate = 1.0;
-          // console.log("🚀 ~ steplessBtn.addEventListener ~ videoRate = 1.0;:", videoRate = 1.0)
-          document.querySelector('.stepless-video-rate-number').innerText = "1.0";
-          document.querySelector('.stepless-video-rate-box .bui-thumb').style.transform = 'translateY(-10px)';
-          document.querySelector('.stepless-video-rate-box .bui-bar').style.transform = 'scaleY(0.2)';
-          mousePositionY = 0;
-          initialPositionY = -10;
+        function stopDragging() {
+          document.removeEventListener('mousemove', updateRateByPointer);
+          document.removeEventListener('mouseup', stopDragging);
+        }
+
+        function startDragging(event) {
+          updateRateByPointer(event);
+          document.addEventListener('mousemove', updateRateByPointer);
+          document.addEventListener('mouseup', stopDragging);
+        }
+
+        function updateRateByStep(direction) {
+          updateRate(videoRate + direction * VIDEO_RATE_STEP);
+        }
+
+        function updateRateByWheel(event) {
+          event.preventDefault();
+          showBox();
+          updateRateByStep(event.deltaY > 0 ? -1 : 1);
+        }
+
+        function updateRateByKeyboard(event) {
+          if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            updateRateByStep(1);
+          }
+          if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') {
+            event.preventDefault();
+            updateRateByStep(-1);
+          }
+        }
+
+        slider.addEventListener('mousedown', startDragging);
+        slider.addEventListener('keydown', updateRateByKeyboard);
+
+        decreaseRateButton.addEventListener('click', () => {
+          updateRateByStep(-1);
         });
+
+        increaseRateButton.addEventListener('click', () => {
+          updateRateByStep(1);
+        });
+
+        rateInput.addEventListener('change', () => {
+          updateRate(rateInput.value);
+        });
+
+        rateInput.addEventListener('keydown', event => {
+          if (event.key === 'Enter') {
+            updateRate(rateInput.value);
+            rateInput.blur();
+          }
+          if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            updateRateByStep(1);
+          }
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            updateRateByStep(-1);
+          }
+        });
+
+        steplessRateButton.addEventListener('wheel', updateRateByWheel, { passive: false });
+
+        // double click to reset rate
+        steplessBtn.addEventListener('dblclick', () => {
+          updateRate(1.0);
+        });
+
+        updateRate(videoRate);
       }else{
         disconnect();
       }
@@ -126,14 +198,14 @@ chrome.storage.sync.get(['biliplus-enable', 'stepless-video-rate'], storage => {
 
 function showBox() {
   const rateBox = document.querySelector('.stepless-video-rate-box');
-  if (!rateBox.classList.contains('display')) {
+  if (rateBox != null && !rateBox.classList.contains('display')) {
     rateBox.classList.add('display');
   }
 }
 
 function hideBox() {
   const rateBox = document.querySelector('.stepless-video-rate-box');
-  if (rateBox.classList.contains('display')) {
+  if (rateBox != null && rateBox.classList.contains('display')) {
     rateBox.classList.remove('display');
   }
 }
